@@ -1,0 +1,84 @@
+{
+  "_note": "minScore is the legacy fallback; use categoryMinScore for per-category thresholds",
+  "minScore": 8,
+  "minSalaryUsd": 3500,
+  "maxPublishedAgeDays": 3,
+  "maxPagesPerQuery": 2,
+  "alertEveryNFailures": 6,
+  "digestCron": "0 19 * * *",
+
+  "_cycleNote": "Watcher cron interval and startup jitter. hostBackoffCycles = how many 10-min cycles to skip a host after 429/503/challenge.",
+  "cycleIntervalMinutes": 10,
+  "cycleJitterSeconds": 90,
+  "hostBackoffCycles": 3,
+
+  "categoryMinScore": {
+    "backend":  8,
+    "fullstack": 7,
+    "frontend": 6,
+    "llm-pure": 5
+  },
+
+  "titleBlocklist": ["junior", "trainee", "intern", "qa", "php", ".net", "c#", "java", "ruby", "1c"],
+
+  "_titleWeightsNote": "Regex patterns matched against title (case-insensitive)",
+  "titleWeights": {
+    "senior|lead": 3,
+    "backend|node\\.?js": 3,
+    "full.?stack": 2,
+    "\\bai\\b|\\bllm\\b|genai|gen\\s?ai": 3,
+    "frontend|front-end": 3,
+    "\\breact\\.?js?\\b": 2
+  },
+
+  "_signalWeightsNote": "Keys = exact strings in signals.languages / signals.llm / signals.aiTooling / signals.frontend. Java/.NET/PHP negatives live here because the scraper already detects them in signals.languages.",
+  "signalWeights": {
+    "Node.js": 3,
+    "TypeScript": 2,
+    "LLM": 4,
+    "RAG": 4,
+    "embeddings": 4,
+    "vector DB": 4,
+    "LangChain": 4,
+    "LangGraph": 4,
+    "LlamaIndex": 3,
+    "OpenAI API": 4,
+    "Anthropic API": 4,
+    "Gemini": 2,
+    "Bedrock": 2,
+    "MCP": 3,
+    "AI agents": 3,
+    "prompt engineering": 2,
+    "evals": 2,
+    "fine-tuning": 2,
+    "Vercel AI SDK": 2,
+    "React": 2,
+    "Next.js": 2,
+    "Vue": 1,
+    "Angular": 1,
+    "Java": -4,
+    ".NET": -4,
+    "PHP": -5,
+    "Ruby": -3
+  },
+
+  "_textWeightsNote": "Regex patterns against title+description. Only for terms not covered by signals.",
+  "textWeights": {
+    "nest\\.?js": 3,
+    "postgresql|postgres\\b": 2,
+    "\\bredis\\b": 1,
+    "\\baws\\b|\\blambda\\b|\\bsqs\\b|\\becs\\b|\\bfargate\\b": 2,
+    "microservices?|rabbitmq|\\bkafka\\b|graphql": 1,
+    "php|laravel": -5,
+    "\\bjava\\b(?!script)|\\bspring\\b": -4
+  },
+
+  "_foreignStacksNote": "Stack names enabled for the foreign-stack filter. Regexes are defined in watch-filter.ts. Python is intentionally absent (it is part of own-stack).",
+  "foreignStacks": [
+    "rust", "golang", "go", "java", "kotlin", "scala",
+    "dotnet", "csharp", "php", "ruby", "rails", "cpp",
+    "elixir", "Swift", "android", "ios", "flutter", "dart"
+  ],
+  "foreignStackPenalty": -4,
+  "requireNodeInStack": true
+}

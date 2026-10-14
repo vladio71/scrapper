@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(node --input-type=module --eval \"import ''./watch.ts''\")",
+      "Bash(npx tsc:*)",
+      "Bash(SCRAPER_NO_MAIN=1 npx tsx:*)",
+      "Bash(DOTENV_CONFIG_PATH=.env.tmp npx tsx:*)",
+      "Bash(npx tsx:*)",
+      "Bash(node:*)",
+      "Bash(npm run watch:dry:*)",
+      "Bash(schtasks /create /tn \"JobWatcher\" /tr \"wscript \"\"C:\\\\Users\\\\vladd\\\\Documents\\\\new_resumes\\\\job-scrapper\\\\run-hidden.vbs\"\"\" /sc onlogon /f)",
+      "Bash(powershell -ExecutionPolicy Bypass -Command \"\\(Get-Command npm -ErrorAction Stop\\).Source\":*)",
+      "Bash(powershell -ExecutionPolicy Bypass -Command:*)",
+      "Bash(npm test)"
+    ]
+  }
+}
