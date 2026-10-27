@@ -5,6 +5,7 @@
  * No side effects, no I/O – safe to import in unit tests.
  *
  * Public API:
+ *   categorize(vacancy)                                 → Category
  *   parseSections(description)                          → DescSections
  *   hasOwnStack(text)                                   → boolean
  *   findForeignStacks(text, enabledStacks)              → string[]
@@ -14,6 +15,21 @@
  */
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+export type Category = 'backend' | 'frontend' | 'fullstack' | 'llm-pure' | 'other';
+
+/** The part of scraper Signals that categorize() looks at. */
+export interface CategorySignals {
+  languages: string[];
+  frontend: string[];
+  llm: string[];
+}
+
+/** Minimal vacancy shape for categorize(): a full scraper Vacancy satisfies it. */
+export interface CategorizeInput {
+  title: string;
+  signals: CategorySignals;
+}
 
 export interface DescSections {
   requirements: string;
@@ -25,6 +41,50 @@ export interface FilterResult {
   reason?: string;
   /** Non-zero only when both own stack and foreign stack coexist (penalty, not a block). */
   penalty: number;
+}
+
+// ─── Classification ───────────────────────────────────────────────────────────
+// Title is checked first; signals are the fallback when the title is neutral.
+// 'other' = non-JS/TS, non-AI roles (annotators, analysts, Go, etc.), never sent.
+// Shared by watch.ts (routing) and stack-stats.ts (backend + fullstack filter).
+export function categorize(v: CategorizeInput): Category {
+  const { languages: langs, frontend: feSignals, llm: llmSignals } = v.signals;
+  const title = v.title;
+
+  // ── Derived booleans ─────────────────────────────────────────────────────
+  const titleFe    = /\bfrontend\b|\bfront-end\b|\breact\.?js?\b|\bangular\b|\bvue\.?js?\b|\bnext\.?js\b/i.test(title);
+  const titleFs    = /full[\s-]?stack/i.test(title);
+  const titleBe    = /\bbackend\b|\bback-end\b|\bnode\.?js\b|\bnest\.?js\b/i.test(title);
+  const titleAI    = /\b(ai|ml|llm|genai|nlp)\b|machine learning/i.test(title);
+  const titleJsTs  = /\bnode\.?js\b|\bnest\.?js\b|\btypescript\b|\bnext\.?js\b|\breact\.?js?\b/i.test(title);
+  // Engineering role guard: llm-pure requires an engineering title.
+  // Filters out growth managers, analysts, PMs and similar non-engineering titles.
+  const isEngTitle = /\bengineer\b|\bdeveloper\b|\barchitect\b|\bml\b/i.test(title);
+
+  // Signal booleans computed early so the Python-backend check can use them.
+  const isJsTs = langs.includes('Node.js') || langs.includes('TypeScript');
+  const hasFe  = feSignals.length > 0;
+  const hasLlm = llmSignals.length > 0;
+
+  // ── 1. Title-based routing ────────────────────────────────────────────────
+  // Pure-frontend title (no backend / fullstack markers)
+  if (titleFe && !titleBe && !titleFs)              return 'frontend';
+  // Fullstack wins over any single-side title marker
+  if (titleFs)                                       return 'fullstack';
+  // Backend title: no JS/TS anywhere but LLM signals present = Python/other LLM backend, goes to digest
+  if (titleBe && !titleFe) {
+    if (!titleJsTs && !isJsTs && hasLlm)             return 'llm-pure';
+    return 'backend';
+  }
+  // AI/LLM/ML title with no JS/TS: digest, but only for engineering roles
+  if (titleAI && !titleJsTs && !titleBe && !titleFe) return isEngTitle ? 'llm-pure' : 'other';
+
+  // ── 2. Signal fallback (title is neutral) ─────────────────────────────────
+  if (hasLlm && !isJsTs) return isEngTitle ? 'llm-pure' : 'other';
+  if (hasFe && isJsTs)   return 'fullstack';  // has both frontend + backend signals
+  if (hasFe)             return 'frontend';
+  if (isJsTs)            return 'backend';
+  return 'other';
 }
 
 // ─── Own-stack detection ──────────────────────────────────────────────────────

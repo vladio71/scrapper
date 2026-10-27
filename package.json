@@ -12,7 +12,8 @@
     "watch": "tsx watch.ts",
     "watch:dry": "tsx watch.ts --dry-run",
     "watch:test": "tsx watch.ts --test",
-    "test": "tsx --test watch-filter.test.ts",
+    "stack-stats": "tsx stack-stats.ts",
+    "test": "tsx --test watch-filter.test.ts stack-stats.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
