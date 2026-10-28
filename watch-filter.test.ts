@@ -8,11 +8,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  categorize,
   hasOwnStack,
   findForeignStacks,
   findYearsWithForeignStack,
   parseSections,
   checkForeignStackFilter,
+  type CategorySignals,
 } from './watch-filter.js';
 
 const ALL_STACKS = [
@@ -22,6 +24,31 @@ const ALL_STACKS = [
 ];
 
 const PENALTY = -4;
+
+// ─── categorize ──────────────────────────────────────────────────────────────
+
+const sig = (partial: Partial<CategorySignals> = {}): CategorySignals =>
+  ({ languages: [], frontend: [], llm: [], ...partial });
+
+describe('categorize', () => {
+  it('backend title', () =>
+    assert.equal(categorize({ title: 'Senior Node.js Backend Developer', signals: sig({ languages: ['Node.js'] }) }), 'backend'));
+  it('fullstack title wins over frontend marker', () =>
+    assert.equal(categorize({ title: 'Full Stack Engineer (React + Node)', signals: sig() }), 'fullstack'));
+  it('pure frontend title', () =>
+    assert.equal(categorize({ title: 'Senior Frontend Developer (React)', signals: sig({ frontend: ['React'] }) }), 'frontend'));
+  it('backend title without JS/TS but with LLM signals goes to llm-pure', () =>
+    assert.equal(categorize({ title: 'Backend Engineer', signals: sig({ languages: ['Python'], llm: ['LLM'] }) }), 'llm-pure'));
+  it('AI title needs an engineering role', () => {
+    assert.equal(categorize({ title: 'ML Engineer (LLM)', signals: sig({ languages: ['Python'] }) }), 'llm-pure');
+    assert.equal(categorize({ title: 'AI Growth Manager', signals: sig() }), 'other');
+  });
+  it('neutral title falls back to signals', () => {
+    assert.equal(categorize({ title: 'Software Engineer', signals: sig({ languages: ['TypeScript'], frontend: ['React'] }) }), 'fullstack');
+    assert.equal(categorize({ title: 'Software Engineer', signals: sig({ languages: ['Node.js'] }) }), 'backend');
+    assert.equal(categorize({ title: 'Software Engineer', signals: sig({ languages: ['Java'] }) }), 'other');
+  });
+});
 
 // ─── hasOwnStack ─────────────────────────────────────────────────────────────
 

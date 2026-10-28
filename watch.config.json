@@ -12,6 +12,10 @@
   "cycleJitterSeconds": 90,
   "hostBackoffCycles": 3,
 
+  "_appNote": "Study app (APP_URL + APP_TOKEN in .env). appQueueEnabled: POST every instant match to /api/applications. appDigestCron: when to send 'У черзі N готових заявок' (machine-local time, empty string = off).",
+  "appQueueEnabled": true,
+  "appDigestCron": "0 20 * * *",
+
   "categoryMinScore": {
     "backend":  8,
     "fullstack": 7,

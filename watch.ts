@@ -5,6 +5,11 @@
  *              llm-pure                        → daily digest
  *              other                           → silently ignored, never sent
  *
+ * Study app (APP_URL + APP_TOKEN in .env):
+ *   every instant match is also POSTed to {APP_URL}/api/applications (appQueueEnabled in
+ *   watch.config.json); appDigestCron sends "У черзі N готових заявок" once a day.
+ *   Failures there are logged and never stop the Telegram flow.
+ *
  * npm run watch          long-running cron process
  * npm run watch:dry      print classification + scores, send nothing, save nothing
  * npm run watch:test     run once, send example messages to Telegram, save nothing
@@ -14,13 +19,25 @@ process.env.SCRAPER_NO_MAIN = '1';
 process.title = 'JobWatcherBot';
 
 import 'dotenv/config';
-import { schedule } from 'node-cron';
+import { schedule, validate as validateCron } from 'node-cron';
 import { Bot, InlineKeyboard } from 'grammy';
 import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
 import {
+  categorize,
   checkForeignStackFilter,
+  type Category,
   type FilterResult,
 } from './watch-filter.js';
+import {
+  buildAppDigestMessage,
+  enqueueApplication,
+  fetchReadyApplications,
+  flushPending,
+  type AppClientOptions,
+  type AppQueueItem,
+  type AppSource,
+  type PendingAppQueueItem,
+} from './watch-app.js';
 import { existsSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -70,7 +87,6 @@ const LOCK_PORT        = 47811;
 const MAX_MSGS_PER_RUN = 15;
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
-type Category = 'backend' | 'frontend' | 'fullstack' | 'llm-pure' | 'other';
 const INSTANT_CATS = new Set<Category>(['backend', 'frontend', 'fullstack']);
 
 interface WatchConfig {
@@ -83,6 +99,10 @@ interface WatchConfig {
   cycleIntervalMinutes: number;
   cycleJitterSeconds: number;
   hostBackoffCycles: number;
+  /** POST instant matches to the study app queue (needs APP_URL + APP_TOKEN in .env). */
+  appQueueEnabled: boolean;
+  /** Cron for the "ready applications" digest; empty string disables it. */
+  appDigestCron: string;
   categoryMinScore: Record<string, number>;
   titleBlocklist: string[];
   titleWeights: Record<string, number>;
@@ -114,6 +134,8 @@ interface WatchState {
   noDescRetries: Record<string, number>; // vacancyKey → attempt count (1-based)
   /** host → epoch-ms until which the host is skipped (after 429/503/challenge). */
   hostBackoff: Record<string, number>;
+  /** Study app POSTs that failed temporarily; retried at the start of the next run. */
+  appQueuePending: PendingAppQueueItem[];
 }
 
 interface ScoreResult { score: number; matched: string[]; blocked: boolean; blockReason?: string; }
@@ -146,6 +168,7 @@ async function loadState(): Promise<WatchState> {
     dayStats: { date: '', runs: 0, instantSent: 0, failedRuns: 0, rejectedByReason: { ...EMPTY_REJECTED } },
     noDescRetries: {},
     hostBackoff: {},
+    appQueuePending: [],
   };
   const s = JSON.parse(await readFile(STATE_FILE, 'utf8')) as WatchState;
   s.digestQueue         ??= [];
@@ -153,6 +176,7 @@ async function loadState(): Promise<WatchState> {
   s.dayStats.rejectedByReason ??= { ...EMPTY_REJECTED };
   s.noDescRetries       ??= {};
   s.hostBackoff         ??= {};
+  s.appQueuePending     ??= [];
   return s;
 }
 
@@ -195,47 +219,8 @@ function vacancyKeys(v: Vacancy, dups: Map<string, Vacancy[]>): string[] {
 }
 
 // ─── Classification ───────────────────────────────────────────────────────────
-// Title is checked first; signals are the fallback when the title is neutral.
-// 'other' = non-JS/TS, non-AI roles (annotators, analysts, Go, etc.) — never sent.
-function categorize(v: Vacancy): Category {
-  const { languages: langs, frontend: feSignals, llm: llmSignals } = v.signals;
-  const title = v.title;
-
-  // ── Derived booleans ─────────────────────────────────────────────────────
-  const titleFe    = /\bfrontend\b|\bfront-end\b|\breact\.?js?\b|\bangular\b|\bvue\.?js?\b|\bnext\.?js\b/i.test(title);
-  const titleFs    = /full[\s-]?stack/i.test(title);
-  const titleBe    = /\bbackend\b|\bback-end\b|\bnode\.?js\b|\bnest\.?js\b/i.test(title);
-  const titleAI    = /\b(ai|ml|llm|genai|nlp)\b|machine learning/i.test(title);
-  const titleJsTs  = /\bnode\.?js\b|\bnest\.?js\b|\btypescript\b|\bnext\.?js\b|\breact\.?js?\b/i.test(title);
-  // Engineering role guard: llm-pure requires an engineering title.
-  // Filters out growth managers, analysts, PMs and similar non-engineering titles.
-  const isEngTitle = /\bengineer\b|\bdeveloper\b|\barchitect\b|\bml\b/i.test(title);
-
-  // Signal booleans computed early so the Python-backend check can use them.
-  const isJsTs = langs.includes('Node.js') || langs.includes('TypeScript');
-  const hasFe  = feSignals.length > 0;
-  const hasLlm = llmSignals.length > 0;
-
-  // ── 1. Title-based routing ────────────────────────────────────────────────
-  // Pure-frontend title (no backend / fullstack markers)
-  if (titleFe && !titleBe && !titleFs)              return 'frontend';
-  // Fullstack wins over any single-side title marker
-  if (titleFs)                                       return 'fullstack';
-  // Backend title: if no JS/TS anywhere but LLM signals present → Python/other LLM backend → digest
-  if (titleBe && !titleFe) {
-    if (!titleJsTs && !isJsTs && hasLlm)             return 'llm-pure';
-    return 'backend';
-  }
-  // AI/LLM/ML title with no JS/TS → digest, but only for engineering roles
-  if (titleAI && !titleJsTs && !titleBe && !titleFe) return isEngTitle ? 'llm-pure' : 'other';
-
-  // ── 2. Signal fallback (title is neutral) ─────────────────────────────────
-  if (hasLlm && !isJsTs) return isEngTitle ? 'llm-pure' : 'other';
-  if (hasFe && isJsTs)   return 'fullstack';  // has both frontend + backend signals
-  if (hasFe)             return 'frontend';
-  if (isJsTs)            return 'backend';
-  return 'other';
-}
+// categorize() lives in watch-filter.ts so stack-stats.ts can reuse it without
+// importing this file (Telegram bot, port lock and cron start on import here).
 
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 function scoreVacancy(v: Vacancy, cfg: WatchConfig, cat: Category): ScoreResult {
@@ -440,6 +425,54 @@ async function sendDailyDigest(overrideQueue?: QueuedDigestItem[]): Promise<void
   }
 }
 
+// ─── Study app: applications queue + ready digest (client in watch-app.ts) ───
+// APP_URL / APP_TOKEN come from .env. Without both, everything here is a no-op
+// (one log line at startup), so the Telegram watcher keeps working unchanged.
+const APP_URL   = (process.env.APP_URL ?? '').trim().replace(/\/+$/, '');
+const APP_TOKEN = (process.env.APP_TOKEN ?? '').trim();
+const APP_CONFIGURED = APP_URL !== '' && APP_TOKEN !== '';
+const appClient: AppClientOptions = { baseUrl: APP_URL, token: APP_TOKEN, timeoutMs: 15_000, log };
+
+function appQueueEnabled(cfg: WatchConfig): boolean {
+  return APP_CONFIGURED && (cfg.appQueueEnabled ?? true);
+}
+
+function toAppQueueItem(v: Vacancy, score: number): AppQueueItem {
+  const source: AppSource = v.source === 'djinni' ? 'djinni' : 'dou';
+  return {
+    url: v.url,
+    title: v.title,
+    company: v.company ?? '',
+    source,
+    score,
+    description: v.description,
+  };
+}
+
+/** POST one match; a temporary failure parks it in state.appQueuePending for the next run. */
+async function queueApplication(state: WatchState, item: AppQueueItem): Promise<void> {
+  state.appQueuePending = await enqueueApplication(appClient, state.appQueuePending, item);
+}
+
+/** Retry parked POSTs once each. Returns true when state changed. */
+async function flushAppQueuePending(state: WatchState, cfg: WatchConfig): Promise<boolean> {
+  if (!appQueueEnabled(cfg) || state.appQueuePending.length === 0) return false;
+  const result = await flushPending(appClient, state.appQueuePending);
+  state.appQueuePending = result.pending;
+  await log(`App queue: retried pending, sent=${result.sent} expired=${result.expired} still pending=${result.pending.length}`);
+  return true;
+}
+
+/** GET ready applications and send one Telegram message. Nothing is sent on any failure or when N = 0. */
+async function sendAppDigest(): Promise<void> {
+  if (!APP_CONFIGURED) return;
+  const items = await fetchReadyApplications(appClient);
+  if (items === null) return;
+  if (items.length === 0) { await log('App digest: 0 ready applications, nothing sent'); return; }
+  const ok = await sendRaw(buildAppDigestMessage(items, APP_URL));
+  await log(`App digest: ${items.length} ready, sent=${ok}`);
+}
+
 // ─── Rejected-vacancy log ────────────────────────────────────────────────────
 async function logRejected(v: Vacancy, blockReason: string, dayStats: DayStats): Promise<void> {
   const entry = { date: new Date().toISOString(), title: v.title, url: v.url, blockReason };
@@ -475,6 +508,9 @@ async function _watchRun(dryRun: boolean, testMode: boolean): Promise<void> {
   if (state.dayStats.date !== today)
     state.dayStats = { date: today, runs: 0, instantSent: 0, failedRuns: 0, rejectedByReason: { ...EMPTY_REJECTED } };
   if (!dryRun && !testMode) state.dayStats.runs++;
+
+  // Study app POSTs that failed last time (endpoint down / not deployed yet) get one more try.
+  if (!dryRun && !testMode && await flushAppQueuePending(state, cfg)) await saveState(state);
 
   const maxAgeMs   = (cfg.maxPublishedAgeDays ?? 3) * 86_400_000;
   const cutoffMs   = Date.now() - maxAgeMs;
@@ -689,12 +725,15 @@ async function _watchRun(dryRun: boolean, testMode: boolean): Promise<void> {
     await log(`${toSend.length} instant matches, capping at ${MAX_MSGS_PER_RUN}`);
 
   let sent = 0;
+  let appQueued = 0;
   for (const { v, result, cat } of toSend) {
     if (sent >= MAX_MSGS_PER_RUN) break;
     if (await sendVacancy(v, result, cat)) {
       vacancyKeys(v, duplicatesOf).forEach(k => seenSet.add(k));
       state.seenKeys = [...seenSet];
       state.dayStats.instantSent++;
+      // Same vacancy goes to the study app queue; a failure there is only logged.
+      if (appQueueEnabled(cfg)) { await queueApplication(state, toAppQueueItem(v, result.score)); appQueued++; }
       await saveState(state);
       sent++;
       if (sent < Math.min(toSend.length, MAX_MSGS_PER_RUN)) await sleep(1000);
@@ -702,7 +741,7 @@ async function _watchRun(dryRun: boolean, testMode: boolean): Promise<void> {
   }
 
   await saveState(state);
-  await log(`Run complete: instant=${sent} queued=${toQueue.length} retry-next=${retryNext.length}`);
+  await log(`Run complete: instant=${sent} app-queue=${appQueued} queued=${toQueue.length} retry-next=${retryNext.length}`);
 }
 
 // ─── Dry-run output ───────────────────────────────────────────────────────────
@@ -784,6 +823,12 @@ async function runTestMode(eligible: Vacancy[], duplicatesOf: Map<string, Vacanc
 
   await sendDailyDigest(llmTop);
   await log(`test: digest sent (${llmTop.length} llm-pure items)`);
+
+  // Read-only check of the study app integration; test mode never POSTs to the queue.
+  if (APP_CONFIGURED) {
+    await sendAppDigest();
+    await log('test: app digest attempted (see lines above)');
+  }
 }
 
 // ─── Process-level error guards (keep the process alive on uncaught errors) ───
@@ -827,6 +872,8 @@ function isWithinActiveHours(): boolean {
 const isDryRun  = process.argv.includes('--dry-run');
 const isTest    = process.argv.includes('--test');
 
+if (!APP_CONFIGURED) await log('Study app integration off: set APP_URL and APP_TOKEN in .env to enable the queue and the ready digest');
+
 if (isDryRun) {
   await watchRun(true);
 } else if (isTest) {
@@ -855,6 +902,20 @@ if (isDryRun) {
     await log('Digest cron fired');
     await sendDailyDigest();
   });
+
+  // "У черзі N готових заявок": same mechanism as the llm-pure digest, machine-local time.
+  const appDigestCron = cfg.appDigestCron ?? '0 20 * * *';
+  if (APP_CONFIGURED && appDigestCron !== '') {
+    if (validateCron(appDigestCron)) {
+      schedule(appDigestCron, async () => {
+        await log('App digest cron fired');
+        await sendAppDigest();
+      });
+      await log(`App digest scheduled (cron ${appDigestCron})`);
+    } else {
+      await log(`Invalid appDigestCron "${appDigestCron}", app digest disabled`);
+    }
+  }
 
   schedule(cycleCron, async () => {
     const jitter = Math.random() * jitterMs;

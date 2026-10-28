@@ -9,5 +9,14 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["scrape-jobs.ts", "watch.ts", "watch-filter.ts", "watch-filter.test.ts"]
+  "include": [
+    "scrape-jobs.ts",
+    "watch.ts",
+    "watch-filter.ts",
+    "watch-filter.test.ts",
+    "watch-app.ts",
+    "watch-app.test.ts",
+    "stack-stats.ts",
+    "stack-stats.test.ts"
+  ]
 }
