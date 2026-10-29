@@ -366,3 +366,32 @@ export function checkForeignStackFilter(
 
   return { blocked: false, penalty: 0 };
 }
+
+// ─── Remote / required-years gate ─────────────────────────────────────────────
+
+export interface RemoteYearsInput {
+  remote: boolean | null;
+  experienceYears: number | null;
+}
+
+export interface RemoteYearsOptions {
+  /** Block everything that is not explicitly remote (hybrid, office, unknown). */
+  remoteOnly?: boolean;
+  /** Block vacancies whose required years of experience exceed this number. */
+  maxRequiredYears?: number | null;
+}
+
+/**
+ * Returns a block reason or null.
+ *   "not-remote"  – remoteOnly is on and the scraper did not see a remote marker
+ *   "exp>N:M"     – vacancy asks for M years, limit is N
+ * An unknown experienceYears (null) never blocks.
+ */
+export function checkRemoteAndYears(v: RemoteYearsInput, opts: RemoteYearsOptions): string | null {
+  if (opts.remoteOnly && v.remote !== true) return 'not-remote';
+  const max = opts.maxRequiredYears;
+  if (max != null && v.experienceYears != null && v.experienceYears > max) {
+    return `exp>${max}:${v.experienceYears}`;
+  }
+  return null;
+}

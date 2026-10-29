@@ -84,5 +84,9 @@
     "elixir", "Swift", "android", "ios", "flutter", "dart"
   ],
   "foreignStackPenalty": -4,
-  "requireNodeInStack": true
+  "requireNodeInStack": true,
+
+  "_gateNote": "remoteOnly: block everything not explicitly remote (hybrid, office, unknown). maxRequiredYears: block vacancies that ask for more years than this (null = off). Both need no code change, flip here and restart JobWatcher.",
+  "remoteOnly": true,
+  "maxRequiredYears": 5
 }

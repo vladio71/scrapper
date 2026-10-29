@@ -14,6 +14,7 @@ import {
   findYearsWithForeignStack,
   parseSections,
   checkForeignStackFilter,
+  checkRemoteAndYears,
   type CategorySignals,
 } from './watch-filter.js';
 
@@ -370,5 +371,31 @@ describe('checkForeignStackFilter – additional cases', () => {
     );
     assert.ok(!r.blocked);
     assert.equal(r.penalty, PENALTY);
+  });
+});
+
+// ─── checkRemoteAndYears ─────────────────────────────────────────────────────
+
+describe('checkRemoteAndYears', () => {
+  it('blocks non-remote (null) when remoteOnly is on', () => {
+    assert.equal(checkRemoteAndYears({ remote: null, experienceYears: 4 }, { remoteOnly: true }), 'not-remote');
+  });
+  it('lets explicit remote through', () => {
+    assert.equal(checkRemoteAndYears({ remote: true, experienceYears: 4 }, { remoteOnly: true }), null);
+  });
+  it('does not block hybrid when remoteOnly is off', () => {
+    assert.equal(checkRemoteAndYears({ remote: null, experienceYears: null }, { remoteOnly: false }), null);
+  });
+  it('blocks when required years exceed the limit', () => {
+    assert.equal(checkRemoteAndYears({ remote: true, experienceYears: 6 }, { maxRequiredYears: 5 }), 'exp>5:6');
+  });
+  it('lets exactly the limit through', () => {
+    assert.equal(checkRemoteAndYears({ remote: true, experienceYears: 5 }, { maxRequiredYears: 5 }), null);
+  });
+  it('unknown years never block', () => {
+    assert.equal(checkRemoteAndYears({ remote: true, experienceYears: null }, { maxRequiredYears: 5 }), null);
+  });
+  it('maxRequiredYears null disables the years rule', () => {
+    assert.equal(checkRemoteAndYears({ remote: true, experienceYears: 9 }, { maxRequiredYears: null }), null);
   });
 });

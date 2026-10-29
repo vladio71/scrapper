@@ -25,6 +25,7 @@ import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
 import {
   categorize,
   checkForeignStackFilter,
+  checkRemoteAndYears,
   type Category,
   type FilterResult,
 } from './watch-filter.js';
@@ -111,9 +112,13 @@ interface WatchConfig {
   foreignStacks: string[];
   foreignStackPenalty: number;
   requireNodeInStack: boolean;
+  /** Block vacancies that are not explicitly remote (hybrid / office / unknown). */
+  remoteOnly?: boolean;
+  /** Block vacancies that require more years of experience than this. */
+  maxRequiredYears?: number | null;
 }
 
-interface RejectedByReason { title: number; required: number; years: number; noNode: number; other: number; }
+interface RejectedByReason { title: number; required: number; years: number; noNode: number; other: number; notRemote?: number; exp?: number; }
 interface DayStats { date: string; runs: number; instantSent: number; failedRuns: number; rejectedByReason: RejectedByReason; }
 
 interface QueuedDigestItem {
@@ -236,6 +241,9 @@ function scoreVacancy(v: Vacancy, cfg: WatchConfig, cat: Category): ScoreResult 
       return { score: 0, matched: [], blocked: true, blockReason: `salary<$${cfg.minSalaryUsd}` };
   }
 
+  const gate = checkRemoteAndYears(v, { remoteOnly: cfg.remoteOnly, maxRequiredYears: cfg.maxRequiredYears });
+  if (gate) return { score: 0, matched: [], blocked: true, blockReason: gate };
+
   // Foreign-stack filter (Part 2)
   const stacks = cfg.foreignStacks ?? [];
   if (stacks.length > 0) {
@@ -289,9 +297,10 @@ function formatDigestItem(n: number, item: QueuedDigestItem): string {
 function buildDigestMessages(queue: QueuedDigestItem[], stats: DayStats, label = ''): string[] {
   const date = new Date().toISOString().slice(0, 10);
   const r = stats.rejectedByReason ?? { title: 0, required: 0, years: 0, noNode: 0, other: 0 };
-  const totalRej = r.title + r.required + r.years + r.noNode + r.other;
+  const notRemote = r.notRemote ?? 0, exp = r.exp ?? 0;
+  const totalRej = r.title + r.required + r.years + r.noNode + r.other + notRemote + exp;
   const rejLine = totalRej > 0
-    ? `🚫 Відсіяно ${totalRej}: title ${r.title}, required ${r.required}, years ${r.years}, no-node ${r.noNode}\n`
+    ? `🚫 Відсіяно ${totalRej}: title ${r.title}, required ${r.required}, years ${r.years}, no-node ${r.noNode}, not-remote ${notRemote}, exp ${exp}\n`
     : '';
   const header = `📊 <b>Daily digest${label} – ${date}</b>\n` +
     `🟢 Alive · ${stats.runs} runs · ${stats.instantSent} instant · ${stats.failedRuns} failed\n` +
@@ -482,6 +491,8 @@ async function logRejected(v: Vacancy, blockReason: string, dayStats: DayStats):
   else if (blockReason.startsWith('required:')) r.required++;
   else if (blockReason.startsWith('years:'))    r.years++;
   else if (blockReason === 'no-node')      r.noNode++;
+  else if (blockReason === 'not-remote')   r.notRemote = (r.notRemote ?? 0) + 1;
+  else if (blockReason.startsWith('exp>')) r.exp = (r.exp ?? 0) + 1;
   else                                     r.other++;
 }
 
