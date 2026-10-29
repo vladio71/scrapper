@@ -132,6 +132,8 @@ export interface Vacancy {
   experienceFrom: 'meta' | 'text' | null;
   englishLevel: string | null;
   remote: boolean | null;
+  /** Djinni: «Countries where we consider candidates» (вільний текст: Poland, Countries of Europe or Ukraine) */
+  countries: string | null;
   views: number | null;
   applications: number | null;
   /** id запитів, якими вакансію знайдено */
@@ -431,6 +433,7 @@ type FieldName =
   | 'experienceYears'
   | 'englishLevel'
   | 'remote'
+  | 'countries'
   | 'views'
   | 'applications';
 
@@ -529,7 +532,8 @@ export class Store {
         experienceYears,
         experienceFrom,
         englishLevel: f<string>('englishLevel') ?? englishFromText(text),
-        remote: f<boolean>('remote') ?? (REMOTE_RE.test(`${title} ${location ?? ''}`) ? true : null),
+        remote: f<boolean>('remote') ?? (isRemoteText(`${title} ${location ?? ''}`) ? true : null),
+        countries: f<string>('countries'),
         views: f<number>('views'),
         applications: f<number>('applications'),
         foundBy: [...d.foundBy].sort(),
@@ -651,6 +655,12 @@ export function parseUkDate(s: string | null | undefined): string | null {
 // ─── Евристики: досвід, англійська, сигнали, треки ─────────────────────────
 
 const REMOTE_RE = /\bfull remote\b|\bremote\b|віддалено/i;
+const HYBRID_RE = /\bhybrid\b|гібрид/i;
+
+/** «Hybrid Remote» містить слово Remote, але це не повністю віддалена робота */
+export function isRemoteText(text: string): boolean {
+  return !HYBRID_RE.test(text) && REMOTE_RE.test(text);
+}
 
 export function experienceFromText(text: string): number | null {
   const patterns = [
@@ -700,7 +710,7 @@ export function extractMeta(text: string) {
     englishLevel: text.match(ENGLISH_META_RE)?.[1] ?? null,
     views: int(/(\d[\d ]{0,6})\s+(?:views?|переглядів|перегляди|перегляд)\b/i),
     applications: int(/(\d[\d ]{0,6})\s+(?:applications?|відгуків|відгуки|відгук)\b/i),
-    remote: REMOTE_RE.test(text) ? true : null,
+    remote: isRemoteText(text) ? true : null,
   };
 }
 
@@ -1211,6 +1221,25 @@ export function parseDjinniListing(html: string) {
   };
 }
 
+/**
+ * Бічна панель вакансії Djinni: формат роботи («Full Remote», «Hybrid Remote», «Office») і
+ * країни кандидатів (`.location-text`). remote тут false для гібриду й офісу, щоб значення
+ * перекрило `true` з картки в списку.
+ */
+export function parseDjinniSidebar($: cheerio.CheerioAPI): { remote: boolean | null; countries: string | null } {
+  const aside = $('aside').first();
+  const countries = clean(aside.find('.location-text').first().text()) || null;
+  const format = clean(
+    aside
+      .find('strong.d-block')
+      .filter((_, el) => $(el).find('.location-text').length === 0)
+      .first()
+      .text(),
+  );
+  const remote = format ? isRemoteText(format) : null;
+  return { remote: format ? remote : null, countries };
+}
+
 export function parseDjinniJob(html: string) {
   const $ = cheerio.load(html);
   const jp = jsonLdJobPostings($)[0] ?? null;
@@ -1229,12 +1258,16 @@ export function parseDjinniJob(html: string) {
     }
   }
   const main = $('main').length ? $('main') : $('body');
+  const side = parseDjinniSidebar($);
+  const meta = extractMeta(clean(main.text()));
+  if (side.remote !== null) meta.remote = side.remote as true | null;
   return {
     jp,
     htmlDesc,
     fallback: htmlDesc || jp ? null : htmlToText(main.html()),
     title: clean($('h1').first().text()) || null,
-    meta: extractMeta(clean(main.text())),
+    meta,
+    countries: side.countries,
   };
 }
 
@@ -1330,6 +1363,7 @@ async function fetchDetail(ctx: Ctx, d: Draft): Promise<void> {
     store.set(d, 'views', p.meta.views, 'html');
     store.set(d, 'applications', p.meta.applications, 'html');
     store.set(d, 'remote', p.meta.remote, 'html');
+    store.set(d, 'countries', p.countries, 'html');
     store.addDesc(d, 'html', p.htmlDesc);
     store.addDesc(d, 'fallback', p.fallback);
   }

@@ -13,7 +13,7 @@
     "watch:dry": "tsx watch.ts --dry-run",
     "watch:test": "tsx watch.ts --test",
     "stack-stats": "tsx stack-stats.ts",
-    "test": "tsx --test watch-filter.test.ts watch-app.test.ts stack-stats.test.ts",
+    "test": "tsx --test watch-filter.test.ts watch-app.test.ts stack-stats.test.ts djinni-sidebar.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

@@ -395,3 +395,16 @@ export function checkRemoteAndYears(v: RemoteYearsInput, opts: RemoteYearsOption
   }
   return null;
 }
+
+// ─── Country gate ─────────────────────────────────────────────────────────────
+
+// Djinni's «Countries where we consider candidates» is free text: "Poland", "Ukraine",
+// "Countries of Europe or Ukraine". Block only when it names other countries and nothing that includes Ukraine.
+const COUNTRY_OK_RE = /ukrain|україн|europe|європ|worldwide|anywhere|global|world/i;
+
+/** Returns "country:<text>" when the vacancy does not consider candidates from Ukraine, else null. Unknown never blocks. */
+export function checkCountries(countries: string | null | undefined): string | null {
+  const c = (countries ?? '').trim();
+  if (!c || COUNTRY_OK_RE.test(c)) return null;
+  return `country:${c}`;
+}
