@@ -646,7 +646,9 @@ async function _watchRun(dryRun: boolean, testMode: boolean): Promise<void> {
   if (dryRun) {
     const withDesc = eligible.filter(v => v.description.trim().length > 0);
     const noDesc   = eligible.filter(v => v.description.trim().length === 0);
-    runDryRun(withDesc, noDesc, eligible, cfg);
+    const eligibleIds = new Set(eligible.map(v => v.id));
+    const skipped  = output.vacancies.filter(v => !eligibleIds.has(v.id));
+    runDryRun(withDesc, noDesc, eligible, cfg, skipped);
     return;
   }
 
@@ -760,8 +762,20 @@ async function _watchRun(dryRun: boolean, testMode: boolean): Promise<void> {
 }
 
 // ─── Dry-run output ───────────────────────────────────────────────────────────
+/** Why a vacancy never reached scoring (gone / duplicate / too old). */
+function skipReason(v: Vacancy, maxAgeDays: number): string {
+  if (v.gone) return 'gone';
+  if (v.duplicateOf) return `duplicate of ${v.duplicateOf}`;
+  if (v.publishedAt) {
+    const days = Math.floor((Date.now() - new Date(v.publishedAt).getTime()) / 86_400_000);
+    return `published ${days}d ago (limit ${maxAgeDays}d)`;
+  }
+  return 'unknown';
+}
+
 function runDryRun(
   withDesc: Vacancy[], noDesc: Vacancy[], eligible: Vacancy[], cfg: WatchConfig,
+  skipped: Vacancy[] = [],
 ): void {
   const all = [...withDesc, ...noDesc];
   if (all.length === 0) { console.log('[dry-run] No new vacancies'); return; }
@@ -799,6 +813,19 @@ function runDryRun(
       console.log(`        ${result!.matched.join(' ')}`);
     }
     if (notify.length > 8) console.log(`        … ${notify.length - 8} more`);
+
+    // Everything that did NOT pass, with the reason (so a missing vacancy can be found here).
+    const line = (v: Vacancy, tag: string) =>
+      console.log(`  ${tag} ${v.title.slice(0, 46).padEnd(48)} ${(v.company ?? '?').slice(0, 18).padEnd(20)} ${v.source}`);
+    for (const { v, result } of blocked) line(v, `[skip: ${result!.blockReason}]`);
+    for (const { v, result } of below)   line(v, `[low: ${result!.score}<${catMin(cat)}]`);
+    for (const { v } of missing)         line(v, '[no description]');
+  }
+
+  if (skipped.length > 0) {
+    console.log(`\n[SKIPPED BEFORE SCORING] ${skipped.length}`);
+    for (const v of skipped)
+      console.log(`  [${skipReason(v, cfg.maxPublishedAgeDays ?? 3)}] ${v.title.slice(0, 46).padEnd(48)} ${(v.company ?? '?').slice(0, 18).padEnd(20)} ${v.source}`);
   }
   console.log(`\n${'─'.repeat(74)}`);
 }
