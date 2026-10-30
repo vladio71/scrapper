@@ -818,7 +818,10 @@ function runDryRun(
     const line = (v: Vacancy, tag: string) =>
       console.log(`  ${tag} ${v.title.slice(0, 46).padEnd(48)} ${(v.company ?? '?').slice(0, 18).padEnd(20)} ${v.source}`);
     for (const { v, result } of blocked) line(v, `[skip: ${result!.blockReason}]`);
-    for (const { v, result } of below)   line(v, `[low: ${result!.score}<${catMin(cat)}]`);
+    for (const { v, result } of below) {
+      line(v, `[low: ${result!.score}<${catMin(cat)}]`);
+      console.log(`        ${result!.matched.join(' ')}`);
+    }
     for (const { v } of missing)         line(v, '[no description]');
   }
 
