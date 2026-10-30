@@ -146,6 +146,9 @@ interface WatchState {
 
 interface ScoreResult { score: number; matched: string[]; blocked: boolean; blockReason?: string; }
 
+const TITLE_OWN_STACK_RE =
+  /\bnode(?:\.?\s*js)?\b|\bnest(?:\.?js)?\b|\btypescript\b|\bnext\.?js\b|\breact(?:\s+native|\.?js?)?\b/i;
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -270,13 +273,22 @@ function scoreVacancy(v: Vacancy, cfg: WatchConfig, cat: Category): ScoreResult 
   for (const [pat, w] of Object.entries(cfg.titleWeights))
     if (new RegExp(pat, 'i').test(v.title)) add(w, `t:${pat}`);
 
+  // Own stack in the title (Node/Nest/TypeScript/Next/React): PHP/Java/.NET/Ruby mentions in the
+  // description are legacy code or a "plus", so the negative weights are skipped.
+  // Hard blocks and the foreign-stack penalty above still apply.
+  const titleHasOwnStack = TITLE_OWN_STACK_RE.test(v.title);
+
   const allSig = [...v.signals.languages, ...v.signals.llm, ...v.signals.aiTooling, ...v.signals.frontend];
-  for (const [label, w] of Object.entries(cfg.signalWeights))
+  for (const [label, w] of Object.entries(cfg.signalWeights)) {
+    if (w < 0 && titleHasOwnStack) continue;
     if (allSig.includes(label)) add(w, `~${label}`);
+  }
 
   const full = `${v.title}\n${v.description}`;
-  for (const [pat, w] of Object.entries(cfg.textWeights))
+  for (const [pat, w] of Object.entries(cfg.textWeights)) {
+    if (w < 0 && titleHasOwnStack) continue;
     if (new RegExp(pat, 'i').test(full)) add(w, `tx:${pat}`);
+  }
 
   return { score, matched, blocked: false };
 }
